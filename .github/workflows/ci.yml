@@ -1,0 +1,86 @@
+name: Pulse Commerce CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  integration-test:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: pulse
+          POSTGRES_PASSWORD: pulse
+          POSTGRES_DB: warehouse
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U pulse -d warehouse"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DATABASE_URL: postgresql://pulse:pulse@localhost:5432/warehouse
+      ARTIFACTS_DIR: artifacts
+      MAX_CONCURRENT_CONTEXTS: "2"
+      MAX_PAGES: "3"
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install PostgreSQL client
+        run: sudo apt-get update && sudo apt-get install -y postgresql-client
+
+      - name: Install Python dependencies and Chromium
+        run: |
+          pip install -r requirements.txt
+          playwright install chromium --with-deps
+
+      - name: Verify Python syntax
+        run: python -m py_compile src/pipeline.py
+
+      - name: Initialize Bronze/Silver/Gold warehouse schema
+        run: psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f sql/init.sql
+
+      - name: Run 1 — Initial scrape and load
+        run: python src/pipeline.py
+
+      - name: Run 2 — Idempotency and time-series delta run
+        run: python src/pipeline.py
+
+      - name: Assert Bronze/Silver/Gold row counts and LAG() deltas
+        run: |
+          BRONZE=$(psql "$DATABASE_URL" -tAc "SELECT COUNT(*) FROM bronze_raw_scrapes;")
+          SILVER=$(psql "$DATABASE_URL" -tAc "SELECT COUNT(*) FROM silver_latest_skus;")
+          HISTORY=$(psql "$DATABASE_URL" -tAc "SELECT COUNT(*) FROM silver_price_history;")
+          GOLD=$(psql "$DATABASE_URL" -tAc "SELECT COUNT(*) FROM gold_price_movements WHERE previous_price IS NOT NULL;")
+
+          echo "Bronze=$BRONZE | Silver=$SILVER | History=$HISTORY | Gold(LAG)=$GOLD"
+
+          test "$BRONZE" -eq 18  || { echo "FAIL: Expected 18 bronze rows, got $BRONZE"; exit 1; }
+          test "$SILVER" -eq 54  || { echo "FAIL: Expected 54 deduplicated silver rows, got $SILVER"; exit 1; }
+          test "$HISTORY" -eq 108 || { echo "FAIL: Expected 108 history rows, got $HISTORY"; exit 1; }
+          test "$GOLD" -eq 54    || { echo "FAIL: Expected 54 gold LAG() rows, got $GOLD"; exit 1; }
+          echo "ALL WAREHOUSE ASSERTIONS PASSED"
+
+      - name: Upload Playwright forensic traces on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-failure-traces
+          path: artifacts/*.zip
+          if-no-files-found: ignore
+          retention-days: 7

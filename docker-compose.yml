@@ -1,0 +1,37 @@
+services:
+  warehouse:
+    image: postgres:17-alpine
+    container_name: pulse-warehouse
+    environment:
+      POSTGRES_USER: pulse
+      POSTGRES_PASSWORD: pulse
+      POSTGRES_DB: warehouse
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./sql/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pulse -d warehouse"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+
+  scraper-worker:
+    build: .
+    init: true
+    shm_size: "1gb"
+    depends_on:
+      warehouse:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://pulse:pulse@warehouse:5432/warehouse
+      ARTIFACTS_DIR: /app/artifacts
+      MAX_CONCURRENT_CONTEXTS: "2"
+      MAX_PAGES: "3"
+    volumes:
+      - ./artifacts:/app/artifacts
+
+volumes:
+  pgdata:
