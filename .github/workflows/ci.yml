@@ -46,7 +46,7 @@ jobs:
 
       - name: Install Python dependencies and Chromium
         run: |
-          pip install --no-cache-dir -r requirements.txt
+          pip install -r requirements.txt
           playwright install chromium --with-deps
 
       - name: Verify Python syntax
