@@ -132,11 +132,7 @@ async def _scrape_zone_once(
 
         for page_num in range(1, MAX_PAGES + 1):
             if page_num > 1:
-                next_btn = page.locator(
-                    f"ul.pagination li.page-item a.page-link:text-is('{page_num}'), "
-                    f"ul.pagination li a:text-is('{page_num}'), "
-                    f"ul.pagination button:text-is('{page_num}')"
-                )
+                next_btn = page.locator(f"button.page-link[data-id='{page_num}']")
                 if await next_btn.count() == 0:
                     logger.info("[%s] No page %d button found; stopping pagination.", zone_id, page_num)
                     break
@@ -148,11 +144,11 @@ async def _scrape_zone_once(
                 # Deterministic AJAX completion check: active tab & first SKU href both change
                 await page.wait_for_function(
                     """([prevHref, targetPage]) => {
-                        const active = document.querySelector('ul.pagination li.active');
+                        const active = document.querySelector('button.page-link.active');
                         const firstLink = document.querySelector('.card.thumbnail a.title');
                         return Boolean(
                             active &&
-                            active.innerText.trim() === String(targetPage) &&
+                            active.getAttribute('data-id') === String(targetPage) &&
                             firstLink &&
                             firstLink.getAttribute('href') !== prevHref
                         );
